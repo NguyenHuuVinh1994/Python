@@ -1,9 +1,9 @@
 import pandas as pd
 import pulp
 import os
-file_path = r'D:\pythonProject\pythonProject\VTI'
+file_path = r'Address'
 try:
-    schedule_df = pd.read_excel("nhansu.xlsx", sheet_name="data")
+    schedule_df = pd.read_excel("NameFile.xlsx", sheet_name="Choice")
     print("File loaded successfully.")
 except FileNotFoundError as e:
     print(f"Error: {e}")
