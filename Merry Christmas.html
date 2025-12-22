@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Celestial Christmas (Final Color Fix)</title>
+    <style>
+        html, body, #root {
+            width: 100%; height: 100%; margin: 0; padding: 0;
+            background-color: #000000; overflow: hidden;
+            font-family: 'Segoe UI', sans-serif; user-select: none;
+        }
+        canvas { display: block; outline: none; cursor: grab; z-index: 1; }
+        canvas:active { cursor: grabbing; }
+
+        /* UI */
+        #ui-container {
+            position: absolute; top: 0; left: 0; width: 100%;
+            pointer-events: none; z-index: 10;
+            display: flex; justify-content: center; padding-top: 15px;
+        }
+        .status-box {
+            background: rgba(0, 0, 0, 0.6);
+            border: 1px solid rgba(255, 215, 0, 0.3);
+            padding: 8px 25px; border-radius: 20px;
+            color: #ffd700; font-family: monospace; font-size: 0.9rem;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.1);
+            text-align: center; backdrop-filter: blur(5px);
+            display: flex; gap: 10px; align-items: center;
+        }
+        .dot { width: 8px; height: 8px; border-radius: 50%; background: #555; transition: 0.3s; }
+        .dot.active { background: #0f0; box-shadow: 0 0 8px #0f0; }
+        .dot.rotate { background: #ff0000; box-shadow: 0 0 8px #ff0000; }
+
+        /* Camera Blur */
+        #webcam {
+            position: absolute; bottom: 10px; right: 10px; width: 120px;
+            border-radius: 12px; border: 1px solid #444; 
+            opacity: 0.3; filter: blur(15px); transform: scaleX(-1);
+            z-index: 20; pointer-events: none; transition: opacity 0.3s;
+        }
+        #webcam:hover { opacity: 0.8; filter: blur(5px); }
+
+        #debug-log { position: absolute; top: 5px; left: 5px; color: #0f0; font-size: 9px; opacity: 0.3; z-index: 20; pointer-events: none;}
+        #footer { position: absolute; bottom: 5px; width: 100%; text-align: center; color: rgba(255,255,255,0.2); font-size: 10px; z-index: 30; pointer-events: none; }
+
+        /* Nút Test */
+        #sim-btn {
+            position: absolute; bottom: 35px; left: 50%; transform: translateX(-50%);
+            padding: 8px 25px; background: rgba(20, 20, 20, 0.8);
+            border: 1px solid #ffd700; color: #ffd700;
+            border-radius: 20px; cursor: pointer; z-index: 50; 
+            font-size: 0.8rem; font-weight: bold; font-family: monospace;
+            transition: 0.2s;
+        }
+        #sim-btn:hover { background: #ffd700; color: #000; }
+        #sim-btn:active { transform: translateX(-50%) scale(0.95); }
+    </style>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "react": "https://esm.sh/react@18.2.0",
+                "react/jsx-runtime": "https://esm.sh/react@18.2.0/jsx-runtime",
+                "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+                "three": "https://esm.sh/three@0.160.0",
+                "@react-three/fiber": "https://esm.sh/@react-three/fiber@8.15.12?external=react,react-dom,three",
+                "@react-three/drei": "https://esm.sh/@react-three/drei@9.96.1?external=react,react-dom,three,@react-three/fiber",
+                "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@2.16.0?external=react,react-dom,three,@react-three/fiber",
+                "@mediapipe/tasks-vision": "https://esm.sh/@mediapipe/tasks-vision@0.10.8"
+            }
+        }
+    </script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+    <div id="debug-log">Init...</div>
+    <div id="root"></div>
+
+    <script>function log(msg) { const el = document.getElementById('debug-log'); if(el) el.innerText = '> ' + msg; }</script>
+
+    <script type="text/babel" data-type="module">
+        import React, { useState, useRef, useEffect, useMemo, Suspense } from 'react';
+        import { createRoot } from 'react-dom/client';
+        import { Canvas, useFrame } from '@react-three/fiber';
+        import { OrbitControls } from '@react-three/drei';
+        import { EffectComposer, Bloom } from '@react-three/postprocessing';
+        import * as THREE from 'three';
+        import { GestureRecognizer, FilesetResolver } from '@mediapipe/tasks-vision';
+
+        log("Loaded.");
+        
+        const COUNT = 10000;
+        const SNOW_COUNT = 600; 
+
+        // --- 1. TEXTURE CHỮ (ĐÃ GIẢM CHÓI) ---
+        const createTextTexture = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = 2048; canvas.height = 512;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.font = '900 160px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            
+            // Gradient Vàng Đầm (Không dùng màu trắng #fff ở đây để tránh chói)
+            const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+            gradient.addColorStop(0, "#ffd700"); // Vàng kim
+            gradient.addColorStop(0.5, "#e6ac00"); // Vàng đậm hơn
+            gradient.addColorStop(1, "#b8860b"); // Vàng nâu
+            ctx.fillStyle = gradient;
+            
+            // Giảm độ nhòe bóng đổ (Shadow Blur) từ 30 xuống 10 để chữ sắc nét hơn
+            ctx.shadowColor = "#e6ac00"; ctx.shadowBlur = 10; 
+            
+            ctx.fillText("MERRY CHRISTMAS", 1024, 256);
+            
+            // Viền chữ màu cam đậm
+            ctx.strokeStyle = '#cd853f'; ctx.lineWidth = 3;
+            ctx.strokeText("MERRY CHRISTMAS", 1024, 256);
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.needsUpdate = true; return tex;
+        };
+
+        // --- SHAPES ---
+        const generateTreePositions = (count) => {
+            const positions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                const t = i / count;
+                const angle = t * Math.PI * 40; 
+                const radius = 6.5 * (1 - t); 
+                const x = Math.cos(angle) * radius;
+                const z = Math.sin(angle) * radius;
+                const y = (t * 16) - 8; 
+                positions[i*3] = x; positions[i*3+1] = y; positions[i*3+2] = z;
+            }
+            return positions;
+        };
+
+        const generateNebulaPositions = (count) => {
+            const positions = new Float32Array(count * 3);
+            for (let i = 0; i < count; i++) {
+                const r = 20 * Math.cbrt(Math.random());
+                const theta = Math.random() * 2 * Math.PI;
+                const phi = Math.acos(2 * Math.random() - 1);
+                positions[i*3] = r * Math.sin(phi) * Math.cos(theta);
+                positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+                positions[i*3+2] = r * Math.cos(phi);
+            }
+            return positions;
+        };
+
+        // --- SNOW ---
+        const Snow = () => {
+            const mesh = useRef();
+            const dummy = useMemo(() => new THREE.Object3D(), []);
+            const particles = useMemo(() => {
+                const temp = [];
+                for(let i = 0; i < SNOW_COUNT; i++) {
+                    temp.push({
+                        x: (Math.random() - 0.5) * 40, y: (Math.random() - 0.5) * 40, z: (Math.random() - 0.5) * 30,
+                        speed: 0.02 + Math.random() * 0.05, factor: Math.random() * 100
+                    });
+                }
+                return temp;
+            }, []);
+
+            useFrame((state) => {
+                if(!mesh.current) return;
+                particles.forEach((p, i) => {
+                    p.y -= p.speed; if (p.y < -20) p.y = 20;
+                    const t = state.clock.elapsedTime;
+                    dummy.position.set(p.x + Math.sin(t + p.factor) * 0.5, p.y, p.z);
+                    dummy.scale.setScalar((Math.sin(t + p.factor) + 2) * 0.04); 
+                    dummy.updateMatrix(); mesh.current.setMatrixAt(i, dummy.matrix);
+                });
+                mesh.current.instanceMatrix.needsUpdate = true;
+            });
+
+            return (
+                <instancedMesh ref={mesh} args={[null, null, SNOW_COUNT]}>
+                    <dodecahedronGeometry args={[0.2, 0]} />
+                    <meshBasicMaterial color="#ffffff" transparent opacity={0.5} />
+                </instancedMesh>
+            );
+        };
+
+        // --- MAIN PARTICLES (Colors Fixed) ---
+        const Particles = ({ isTree }) => {
+            const meshRef = useRef();
+            const dummy = useMemo(() => new THREE.Object3D(), []);
+            const treePos = useMemo(() => generateTreePositions(COUNT), []);
+            const nebulaPos = useMemo(() => generateNebulaPositions(COUNT), []);
+            const currentPos = useMemo(() => new Float32Array(nebulaPos), []);
+            const sparkles = useMemo(() => new Float32Array(COUNT).map(() => Math.random()), []);
+            
+            // --- BẢNG MÀU RỰC RỠ HƠN ---
+            const colorGreen = useMemo(() => new THREE.Color('#00ff44'), []); // Xanh lá Neon (Sáng hơn)
+            const colorRed = useMemo(() => new THREE.Color('#ff2222'), []);   // Đỏ tươi (Sáng hơn)
+            const colorWhite = useMemo(() => new THREE.Color('#e0f7fa'), []); // Trắng ánh xanh nhẹ
+            const colorSparkle = useMemo(() => new THREE.Color('#ffffff'), []); // Trắng tinh (khi lấp lánh)
+
+            // Phân loại hạt
+            const baseColorIndices = useMemo(() => {
+                const arr = new Uint8Array(COUNT);
+                for(let i=0; i<COUNT; i++) {
+                    const rand = Math.random();
+                    if (rand < 0.6) arr[i] = 0; // Green
+                    else if (rand < 0.9) arr[i] = 1; // Red
+                    else arr[i] = 2; // White
+                }
+                return arr;
+            }, []);
+
+            useFrame((state) => {
+                if (!meshRef.current) return;
+                const time = state.clock.getElapsedTime();
+                const lerpSpeed = isTree ? 0.08 : 0.03;
+
+                for (let i = 0; i < COUNT; i++) {
+                    const ix = i * 3;
+                    const tx = isTree ? treePos[ix] : nebulaPos[ix];
+                    const ty = isTree ? treePos[ix+1] : nebulaPos[ix+1];
+                    const tz = isTree ? treePos[ix+2] : nebulaPos[ix+2];
+
+                    currentPos[ix] += (tx - currentPos[ix]) * lerpSpeed;
+                    currentPos[ix+1] += (ty - currentPos[ix+1]) * lerpSpeed;
+                    currentPos[ix+2] += (tz - currentPos[ix+2]) * lerpSpeed;
+
+                    const noise = Math.sin(time * 2 + i) * 0.05;
+                    dummy.position.set(currentPos[ix] + noise, currentPos[ix+1] + noise, currentPos[ix+2] + noise);
+                    
+                    const isSparkling = Math.sin(time * 5 + sparkles[i] * 100) > 0.96; // Tăng ngưỡng để ít hạt lấp lánh hơn -> thấy màu rõ hơn
+                    
+                    if(isSparkling) {
+                        // Khi lấp lánh: Màu trắng tinh, To hẳn lên
+                        dummy.scale.setScalar(isTree ? 0.20 : 0.15); 
+                        meshRef.current.setColorAt(i, colorSparkle);
+                    } else {
+                        // Bình thường: Tăng kích thước cơ bản lên (0.09) để rõ màu
+                        dummy.scale.setScalar(isTree ? 0.09 : 0.05);
+                        
+                        const colorIndex = baseColorIndices[i];
+                        if(colorIndex === 0) meshRef.current.setColorAt(i, colorGreen);
+                        else if(colorIndex === 1) meshRef.current.setColorAt(i, colorRed);
+                        else meshRef.current.setColorAt(i, colorWhite);
+                    }
+                    dummy.updateMatrix(); meshRef.current.setMatrixAt(i, dummy.matrix);
+                }
+                meshRef.current.instanceMatrix.needsUpdate = true;
+                if(meshRef.current.instanceColor) meshRef.current.instanceColor.needsUpdate = true;
+            });
+
+            return (
+                <instancedMesh ref={meshRef} args={[null, null, COUNT]}>
+                    <dodecahedronGeometry args={[0.2, 0]} />
+                    {/* Dùng MeshBasicMaterial nhưng chỉnh roughness cao để màu lì hơn, rõ hơn */}
+                    <meshBasicMaterial roughness={0.5} metalness={0.5} toneMapped={false} />
+                </instancedMesh>
+            );
+        };
+
+        // --- TEXT COMPONENT ---
+        const TextPlane = ({ visible }) => {
+            const meshRef = useRef();
+            const texture = useMemo(() => createTextTexture(), []);
+
+            useFrame((state, delta) => {
+                if(!meshRef.current) return;
+                const targetScale = visible ? 1 : 0;
+                const targetOpacity = visible ? 1 : 0;
+                meshRef.current.scale.setScalar(THREE.MathUtils.lerp(meshRef.current.scale.x, targetScale * 1, delta * 3));
+                meshRef.current.material.opacity = THREE.MathUtils.lerp(meshRef.current.material.opacity, targetOpacity, delta * 3);
+            });
+
+            return (
+                <mesh ref={meshRef} position={[0, 9, 0]} scale={[0,0,0]}>
+                    <planeGeometry args={[12, 3]} />
+                    <meshBasicMaterial map={texture} transparent={true} opacity={0} side={THREE.DoubleSide} depthWrite={false} toneMapped={false} />
+                </mesh>
+            );
+        };
+
+        // --- SCENE CONTROLLER ---
+        const SceneController = ({ handDetected, isFist }) => {
+            const groupRef = useRef();
+            useFrame((state, delta) => {
+                if (!groupRef.current) return;
+                if (isFist) groupRef.current.rotation.y += 2.5 * delta;
+                else groupRef.current.rotation.y += 0.05 * delta;
+            });
+            return (
+                <group ref={groupRef} position={[0, -2, 0]}>
+                    <Particles isTree={handDetected} />
+                    <TextPlane visible={handDetected} />
+                </group>
+            );
+        };
+
+        // --- HAND INPUT ---
+        const HandInput = ({ setHandDetected, setIsFist, setStatus, isSimulating }) => {
+            const videoRef = useRef(null);
+            useEffect(() => {
+                let recognizer;
+                const start = async () => {
+                    try {
+                        log("Loading AI...");
+                        const vision = await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm");
+                        recognizer = await GestureRecognizer.createFromOptions(vision, {
+                            baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task", delegate: "GPU" },
+                            runningMode: "VIDEO", numHands: 1
+                        });
+                        log("Camera...");
+                        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                        if(videoRef.current) {
+                            videoRef.current.srcObject = stream;
+                            videoRef.current.onloadeddata = () => {
+                                log("Active."); setStatus("READY"); loop();
+                            };
+                        }
+                    } catch (e) { log("Cam Error."); setStatus("FAILED"); }
+                };
+                const loop = () => {
+                    if(!isSimulating && videoRef.current && videoRef.current.readyState >= 2 && recognizer) {
+                        const results = recognizer.recognizeForVideo(videoRef.current, Date.now());
+                        if (results.gestures.length > 0) {
+                            setHandDetected(true);
+                            const gesture = results.gestures[0][0].categoryName;
+                            if (gesture === 'Closed_Fist') setIsFist(true);
+                            else setIsFist(false);
+                        } else {
+                            setHandDetected(false); setIsFist(false);
+                        }
+                    }
+                    requestAnimationFrame(loop);
+                };
+                start();
+            }, [isSimulating]);
+            return <video ref={videoRef} id="webcam" autoPlay playsInline muted />;
+        };
+
+        // --- MAIN APP ---
+        const App = () => {
+            const [handDetected, setHandDetected] = useState(false);
+            const [isFist, setIsFist] = useState(false);
+            const [status, setStatus] = useState("LOADING...");
+            const [isSimulating, setIsSimulating] = useState(false);
+
+            return (
+                <div style={{width:'100%', height:'100%'}}>
+                    <div id="ui-container">
+                        <div className="status-box">
+                            <div className={`dot ${handDetected ? 'active' : ''} ${isFist ? 'rotate' : ''}`}></div>
+                            {isFist ? "ROTATING 360°" : (handDetected ? "TREE FORMED" : "WAITING FOR HAND")}
+                        </div>
+                    </div>
+
+                    <Canvas dpr={[1, 2]} camera={{ position: [0, 2, 22], fov: 45 }}>
+                        <color attach="background" args={['#000000']} />
+                        <ambientLight intensity={0.5} />
+                        <pointLight position={[10, 10, 10]} intensity={1} color="white" />
+                        <pointLight position={[-10, -10, -10]} intensity={0.5} color="blue" />
+                        
+                        <Suspense fallback={null}>
+                            <Snow />
+                            <SceneController handDetected={handDetected} isFist={isFist} />
+                        </Suspense>
+                        
+                        {/* Giảm Threshold xuống 0.6 và Intensity xuống 1.0 để màu không bị cháy sáng */}
+                        <EffectComposer disableNormalPass>
+                            <Bloom luminanceThreshold={0.6} mipmapBlur intensity={1.2} radius={0.4} />
+                        </EffectComposer>
+                        <OrbitControls enableZoom={true} enableRotate={true} enablePan={false} minDistance={10} maxDistance={60} />
+                    </Canvas>
+
+                    <HandInput setHandDetected={setHandDetected} setIsFist={setIsFist} setStatus={setStatus} isSimulating={isSimulating} />
+                    <div id="footer">aiinsight.vn</div>
+
+                    <button id="sim-btn"
+                        onMouseDown={() => { setIsSimulating(true); setHandDetected(true); setIsFist(true); }}
+                        onMouseUp={() => { setIsSimulating(false); setHandDetected(false); setIsFist(false); }}
+                        onTouchStart={() => { setIsSimulating(true); setHandDetected(true); setIsFist(true); }}
+                        onTouchEnd={() => { setIsSimulating(false); setHandDetected(false); setIsFist(false); }}
+                    >
+                        HOLD TO SIMULATE FIST
+                    </button>
+                </div>
+            );
+        };
+
+        createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
